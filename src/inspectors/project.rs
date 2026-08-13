@@ -1,11 +1,69 @@
 use std::env;
 use std::fs;
 use std::path::Path;
+use std::collections::HashMap;
+use serde::Deserialize;
+
 use crate::resolver::path::find_all_in_path;
 use crate::platform::find_services;
 use crate::inspectors::executable::query_version;
 
-/// Scans the current directory to diagnose project environment dependencies using a structured tree.
+#[derive(Deserialize, Debug)]
+struct PackageJson {
+    engines: Option<Engines>,
+}
+
+#[derive(Deserialize, Debug)]
+struct Engines {
+    node: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+struct DockerCompose {
+    services: Option<HashMap<String, Service>>,
+}
+
+#[derive(Deserialize, Debug)]
+struct Service {
+    image: Option<String>,
+}
+
+/// Parses docker-compose configuration files to identify required databases/services.
+fn get_docker_compose_services(path: &Path) -> Vec<String> {
+    let mut services = Vec::new();
+    let content = match fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return services,
+    };
+    
+    let compose: DockerCompose = match serde_yaml::from_str(&content) {
+        Ok(c) => c,
+        Err(_) => return services,
+    };
+    
+    if let Some(srvs) = compose.services {
+        for (name, details) in srvs {
+            let name_lower = name.to_lowercase();
+            let image_lower = details.image.unwrap_or_default().to_lowercase();
+            
+            if name_lower.contains("postgres") || image_lower.contains("postgres") {
+                services.push("PostgreSQL".to_string());
+            } else if name_lower.contains("redis") || image_lower.contains("redis") {
+                services.push("Redis".to_string());
+            } else if name_lower.contains("mysql") || image_lower.contains("mysql") {
+                services.push("MySQL".to_string());
+            } else if name_lower.contains("mongodb") || image_lower.contains("mongo") {
+                services.push("MongoDB".to_string());
+            }
+        }
+    }
+    
+    services.sort();
+    services.dedup();
+    services
+}
+
+/// Scans the current directory to diagnose project environment dependencies.
 pub fn inspect_current_project() {
     let current_dir = match env::current_dir() {
         Ok(d) => d,
@@ -50,21 +108,8 @@ pub fn inspect_current_project() {
 
             // Docker Compose parsing
             if *filename == "docker-compose.yml" || *filename == "docker-compose.yaml" {
-                if let Ok(content) = fs::read_to_string(path) {
-                    let content_lower = content.to_lowercase();
-                    if content_lower.contains("postgres") || content_lower.contains("postgresql") {
-                        required_services.push("PostgreSQL".to_string());
-                    }
-                    if content_lower.contains("redis") {
-                        required_services.push("Redis".to_string());
-                    }
-                    if content_lower.contains("mysql") {
-                        required_services.push("MySQL".to_string());
-                    }
-                    if content_lower.contains("mongodb") || content_lower.contains("mongo") {
-                        required_services.push("MongoDB".to_string());
-                    }
-                }
+                let services_list = get_docker_compose_services(&path);
+                required_services.extend(services_list);
             }
         }
     }
@@ -77,6 +122,9 @@ pub fn inspect_current_project() {
 
     let env_file_path = current_dir.join(".env");
     let has_env = env_file_path.is_file();
+    if has_env {
+        files.push(".env".to_string());
+    }
 
     let mut check_failed = false;
     let mut reasons = Vec::new();
@@ -309,16 +357,10 @@ fn check_node_version_requirement(project_dir: &Path, node_path: &Path) -> Optio
     let pkg_json_path = project_dir.join("package.json");
     let content = fs::read_to_string(pkg_json_path).ok()?;
     
-    let engines_idx = content.find("\"engines\"")?;
-    let content_after = &content[engines_idx..];
-    let node_idx = content_after.find("\"node\"")?;
-    let line_after_node = &content_after[node_idx..];
-    
-    let start_quote = line_after_node.find(':')? + 1;
-    let rest = &line_after_node[start_quote..];
-    let val_start = rest.find('"')? + 1;
-    let val_end = rest[val_start..].find('"')? + val_start;
-    let req_version = rest[val_start..val_end].trim();
+    let pkg: PackageJson = serde_json::from_str(&content).ok()?;
+    let engines = pkg.engines?;
+    let req_version = engines.node?;
+    let req_version = req_version.trim();
 
     let active_version = query_version(node_path)?;
     let clean_active = active_version.trim_start_matches('v');
@@ -345,4 +387,56 @@ fn check_node_version_requirement(project_dir: &Path, node_path: &Path) -> Optio
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::env;
+
+    #[test]
+    fn test_parse_package_json() {
+        let temp_dir = env::temp_dir().join("why_test_project");
+        let _ = fs::create_dir_all(&temp_dir);
+        let pkg_path = temp_dir.join("package.json");
+        
+        let pkg_content = r#"{
+            "name": "test-project",
+            "engines": {
+                "node": ">=22"
+            }
+        }"#;
+        fs::write(&pkg_path, pkg_content).unwrap();
+
+        let pkg: PackageJson = serde_json::from_str(pkg_content).unwrap();
+        assert_eq!(pkg.engines.unwrap().node.unwrap(), ">=22");
+        
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_parse_docker_compose() {
+        let temp_dir = env::temp_dir().join("why_test_compose");
+        let _ = fs::create_dir_all(&temp_dir);
+        let compose_path = temp_dir.join("docker-compose.yml");
+        
+        let compose_content = r#"
+version: '3.8'
+services:
+  db:
+    image: postgres:15-alpine
+    ports:
+      - "5432:5432"
+  cache:
+    image: redis:alpine
+"#;
+        fs::write(&compose_path, compose_content).unwrap();
+
+        let services = get_docker_compose_services(&compose_path);
+        assert!(services.contains(&"PostgreSQL".to_string()));
+        assert!(services.contains(&"Redis".to_string()));
+        
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
 }
