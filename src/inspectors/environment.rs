@@ -1,4 +1,5 @@
-#![allow(dead_code)]`nuse std::env;
+#![allow(dead_code)]
+use std::env;
 
 /// Scans environment variables matching the query.
 pub fn scan_env_variables(query: &str) -> Vec<(String, String)> {
