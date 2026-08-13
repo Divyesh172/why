@@ -7,7 +7,7 @@ use serde::Deserialize;
 use crate::resolver::path::find_all_in_path;
 use crate::platform::find_services;
 use crate::inspectors::executable::query_version;
-use crate::inspectors::finding::{Finding, Severity, EvidenceNode, Relationship};
+use crate::inspectors::finding::{Finding, Severity, EvidenceNode, Relationship, EvidenceGraph};
 
 #[derive(Deserialize, Debug)]
 struct PackageJson {
@@ -72,7 +72,7 @@ fn get_node_engine_requirement(project_dir: &Path) -> Option<String> {
     pkg.engines?.node
 }
 
-/// Scans the current directory to diagnose project environment dependencies using the graph model.
+/// Scans the current directory to diagnose project environment dependencies.
 pub fn inspect_current_project(json: bool) {
     let current_dir = match env::current_dir() {
         Ok(d) => d,
@@ -161,17 +161,19 @@ pub fn inspect_current_project(json: bool) {
                         severity: Severity::Error,
                         subject: "Node.js".to_string(),
                         cause: format!("Active Node.js version does not satisfy package.json requirement: {}", ref_err),
-                        nodes: vec![
-                            EvidenceNode { id: "pkg_json".to_string(), node_type: "File".to_string(), label: "package.json".to_string(), value: "".to_string() },
-                            EvidenceNode { id: "node_req".to_string(), node_type: "Constraint".to_string(), label: "Node Requirement".to_string(), value: req_version },
-                            EvidenceNode { id: "node_exe".to_string(), node_type: "Binary".to_string(), label: "node.exe".to_string(), value: node_path_str },
-                            EvidenceNode { id: "node_active".to_string(), node_type: "Runtime".to_string(), label: "Active Node.js".to_string(), value: active_ver },
-                        ],
-                        relationships: vec![
-                            Relationship { from: "pkg_json".to_string(), relation: "requires".to_string(), to: "node_req".to_string() },
-                            Relationship { from: "node_req".to_string(), relation: "compared with".to_string(), to: "node_active".to_string() },
-                            Relationship { from: "node_exe".to_string(), relation: "resolves to".to_string(), to: "node_active".to_string() },
-                        ],
+                        graph: EvidenceGraph::new(
+                            vec![
+                                EvidenceNode { id: "pkg_json".to_string(), node_type: "File".to_string(), label: "package.json".to_string(), value: "".to_string() },
+                                EvidenceNode { id: "node_req".to_string(), node_type: "Constraint".to_string(), label: "Node Requirement".to_string(), value: req_version },
+                                EvidenceNode { id: "node_exe".to_string(), node_type: "Binary".to_string(), label: "node.exe".to_string(), value: node_path_str },
+                                EvidenceNode { id: "node_active".to_string(), node_type: "Runtime".to_string(), label: "Active Node.js".to_string(), value: active_ver },
+                            ],
+                            vec![
+                                Relationship { from: "pkg_json".to_string(), relation: "requires".to_string(), to: "node_req".to_string() },
+                                Relationship { from: "node_req".to_string(), relation: "compared with".to_string(), to: "node_active".to_string() },
+                                Relationship { from: "node_exe".to_string(), relation: "resolves to".to_string(), to: "node_active".to_string() },
+                            ]
+                        ),
                         suggestion: Some("Switch Node version to satisfy the constraint using your node manager (nvm, fnm, or scoop).".to_string()),
                     });
                 }
@@ -180,17 +182,19 @@ pub fn inspect_current_project(json: bool) {
                         severity: Severity::Info,
                         subject: "Node.js".to_string(),
                         cause: "Node.js environment matches project requirement.".to_string(),
-                        nodes: vec![
-                            EvidenceNode { id: "pkg_json".to_string(), node_type: "File".to_string(), label: "package.json".to_string(), value: "".to_string() },
-                            EvidenceNode { id: "node_req".to_string(), node_type: "Constraint".to_string(), label: "Node Requirement".to_string(), value: req_version },
-                            EvidenceNode { id: "node_exe".to_string(), node_type: "Binary".to_string(), label: "node.exe".to_string(), value: node_path_str },
-                            EvidenceNode { id: "node_active".to_string(), node_type: "Runtime".to_string(), label: "Active Node.js".to_string(), value: active_ver },
-                        ],
-                        relationships: vec![
-                            Relationship { from: "pkg_json".to_string(), relation: "requires".to_string(), to: "node_req".to_string() },
-                            Relationship { from: "node_req".to_string(), relation: "compared with".to_string(), to: "node_active".to_string() },
-                            Relationship { from: "node_exe".to_string(), relation: "resolves to".to_string(), to: "node_active".to_string() },
-                        ],
+                        graph: EvidenceGraph::new(
+                            vec![
+                                EvidenceNode { id: "pkg_json".to_string(), node_type: "File".to_string(), label: "package.json".to_string(), value: "".to_string() },
+                                EvidenceNode { id: "node_req".to_string(), node_type: "Constraint".to_string(), label: "Node Requirement".to_string(), value: req_version },
+                                EvidenceNode { id: "node_exe".to_string(), node_type: "Binary".to_string(), label: "node.exe".to_string(), value: node_path_str },
+                                EvidenceNode { id: "node_active".to_string(), node_type: "Runtime".to_string(), label: "Active Node.js".to_string(), value: active_ver },
+                            ],
+                            vec![
+                                Relationship { from: "pkg_json".to_string(), relation: "requires".to_string(), to: "node_req".to_string() },
+                                Relationship { from: "node_req".to_string(), relation: "compared with".to_string(), to: "node_active".to_string() },
+                                Relationship { from: "node_exe".to_string(), relation: "resolves to".to_string(), to: "node_active".to_string() },
+                            ]
+                        ),
                         suggestion: None,
                     });
                 }
@@ -200,13 +204,15 @@ pub fn inspect_current_project(json: bool) {
                 severity: Severity::Error,
                 subject: "Node.js".to_string(),
                 cause: "Node.js runtime is missing on PATH.".to_string(),
-                nodes: vec![
-                    EvidenceNode { id: "pkg_json".to_string(), node_type: "File".to_string(), label: "package.json".to_string(), value: "".to_string() },
-                    EvidenceNode { id: "node_runtime".to_string(), node_type: "Runtime".to_string(), label: "Node.js".to_string(), value: "Not Found".to_string() },
-                ],
-                relationships: vec![
-                    Relationship { from: "pkg_json".to_string(), relation: "requires".to_string(), to: "node_runtime".to_string() },
-                ],
+                graph: EvidenceGraph::new(
+                    vec![
+                        EvidenceNode { id: "pkg_json".to_string(), node_type: "File".to_string(), label: "package.json".to_string(), value: "".to_string() },
+                        EvidenceNode { id: "node_runtime".to_string(), node_type: "Runtime".to_string(), label: "Node.js".to_string(), value: "Not Found".to_string() },
+                    ],
+                    vec![
+                        Relationship { from: "pkg_json".to_string(), relation: "requires".to_string(), to: "node_runtime".to_string() },
+                    ]
+                ),
                 suggestion: Some("Install Node.js (via scoop install nodejs, fnm, or directly from nodejs.org).".to_string()),
             });
         }
@@ -224,15 +230,17 @@ pub fn inspect_current_project(json: bool) {
                 severity: Severity::Info,
                 subject: "Python".to_string(),
                 cause: "Python runtime is available.".to_string(),
-                nodes: vec![
-                    EvidenceNode { id: "py_file".to_string(), node_type: "File".to_string(), label: filename.to_string(), value: "".to_string() },
-                    EvidenceNode { id: "py_exe".to_string(), node_type: "Binary".to_string(), label: "python.exe".to_string(), value: python_path },
-                    EvidenceNode { id: "py_active".to_string(), node_type: "Runtime".to_string(), label: "Active Python".to_string(), value: active_ver },
-                ],
-                relationships: vec![
-                    Relationship { from: "py_file".to_string(), relation: "requires".to_string(), to: "py_active".to_string() },
-                    Relationship { from: "py_exe".to_string(), relation: "resolves to".to_string(), to: "py_active".to_string() },
-                ],
+                graph: EvidenceGraph::new(
+                    vec![
+                        EvidenceNode { id: "py_file".to_string(), node_type: "File".to_string(), label: filename.to_string(), value: "".to_string() },
+                        EvidenceNode { id: "py_exe".to_string(), node_type: "Binary".to_string(), label: "python.exe".to_string(), value: python_path },
+                        EvidenceNode { id: "py_active".to_string(), node_type: "Runtime".to_string(), label: "Active Python".to_string(), value: active_ver },
+                    ],
+                    vec![
+                        Relationship { from: "py_file".to_string(), relation: "requires".to_string(), to: "py_active".to_string() },
+                        Relationship { from: "py_exe".to_string(), relation: "resolves to".to_string(), to: "py_active".to_string() },
+                    ]
+                ),
                 suggestion: None,
             });
         } else {
@@ -240,13 +248,15 @@ pub fn inspect_current_project(json: bool) {
                 severity: Severity::Error,
                 subject: "Python".to_string(),
                 cause: "Python executable is missing on PATH.".to_string(),
-                nodes: vec![
-                    EvidenceNode { id: "py_file".to_string(), node_type: "File".to_string(), label: filename.to_string(), value: "".to_string() },
-                    EvidenceNode { id: "py_runtime".to_string(), node_type: "Runtime".to_string(), label: "Python".to_string(), value: "Not Found".to_string() },
-                ],
-                relationships: vec![
-                    Relationship { from: "py_file".to_string(), relation: "requires".to_string(), to: "py_runtime".to_string() },
-                ],
+                graph: EvidenceGraph::new(
+                    vec![
+                        EvidenceNode { id: "py_file".to_string(), node_type: "File".to_string(), label: filename.to_string(), value: "".to_string() },
+                        EvidenceNode { id: "py_runtime".to_string(), node_type: "Runtime".to_string(), label: "Python".to_string(), value: "Not Found".to_string() },
+                    ],
+                    vec![
+                        Relationship { from: "py_file".to_string(), relation: "requires".to_string(), to: "py_runtime".to_string() },
+                    ]
+                ),
                 suggestion: Some("Install Python (via scoop install python, or download from python.org).".to_string()),
             });
         }
@@ -262,15 +272,17 @@ pub fn inspect_current_project(json: bool) {
                 severity: Severity::Info,
                 subject: "Rust".to_string(),
                 cause: "Rust toolchain is active and available.".to_string(),
-                nodes: vec![
-                    EvidenceNode { id: "cargo_toml".to_string(), node_type: "File".to_string(), label: "Cargo.toml".to_string(), value: "".to_string() },
-                    EvidenceNode { id: "rust_exe".to_string(), node_type: "Binary".to_string(), label: "cargo.exe".to_string(), value: rust_path },
-                    EvidenceNode { id: "rust_active".to_string(), node_type: "Runtime".to_string(), label: "Active Rust".to_string(), value: active_ver },
-                ],
-                relationships: vec![
-                    Relationship { from: "cargo_toml".to_string(), relation: "requires".to_string(), to: "rust_active".to_string() },
-                    Relationship { from: "rust_exe".to_string(), relation: "resolves to".to_string(), to: "rust_active".to_string() },
-                ],
+                graph: EvidenceGraph::new(
+                    vec![
+                        EvidenceNode { id: "cargo_toml".to_string(), node_type: "File".to_string(), label: "Cargo.toml".to_string(), value: "".to_string() },
+                        EvidenceNode { id: "rust_exe".to_string(), node_type: "Binary".to_string(), label: "cargo.exe".to_string(), value: rust_path },
+                        EvidenceNode { id: "rust_active".to_string(), node_type: "Runtime".to_string(), label: "Active Rust".to_string(), value: active_ver },
+                    ],
+                    vec![
+                        Relationship { from: "cargo_toml".to_string(), relation: "requires".to_string(), to: "rust_active".to_string() },
+                        Relationship { from: "rust_exe".to_string(), relation: "resolves to".to_string(), to: "rust_active".to_string() },
+                    ]
+                ),
                 suggestion: None,
             });
         } else {
@@ -278,13 +290,15 @@ pub fn inspect_current_project(json: bool) {
                 severity: Severity::Error,
                 subject: "Rust".to_string(),
                 cause: "Cargo executable is missing on PATH.".to_string(),
-                nodes: vec![
-                    EvidenceNode { id: "cargo_toml".to_string(), node_type: "File".to_string(), label: "Cargo.toml".to_string(), value: "".to_string() },
-                    EvidenceNode { id: "rust_runtime".to_string(), node_type: "Runtime".to_string(), label: "Rust".to_string(), value: "Not Found".to_string() },
-                ],
-                relationships: vec![
-                    Relationship { from: "cargo_toml".to_string(), relation: "requires".to_string(), to: "rust_runtime".to_string() },
-                ],
+                graph: EvidenceGraph::new(
+                    vec![
+                        EvidenceNode { id: "cargo_toml".to_string(), node_type: "File".to_string(), label: "Cargo.toml".to_string(), value: "".to_string() },
+                        EvidenceNode { id: "rust_runtime".to_string(), node_type: "Runtime".to_string(), label: "Rust".to_string(), value: "Not Found".to_string() },
+                    ],
+                    vec![
+                        Relationship { from: "cargo_toml".to_string(), relation: "requires".to_string(), to: "rust_runtime".to_string() },
+                    ]
+                ),
                 suggestion: Some("Install Rust toolchain using rustup (from https://rustup.rs).".to_string()),
             });
         }
@@ -300,15 +314,17 @@ pub fn inspect_current_project(json: bool) {
                 severity: Severity::Info,
                 subject: "Go".to_string(),
                 cause: "Go runtime is available.".to_string(),
-                nodes: vec![
-                    EvidenceNode { id: "go_mod".to_string(), node_type: "File".to_string(), label: "go.mod".to_string(), value: "".to_string() },
-                    EvidenceNode { id: "go_exe".to_string(), node_type: "Binary".to_string(), label: "go.exe".to_string(), value: go_path },
-                    EvidenceNode { id: "go_active".to_string(), node_type: "Runtime".to_string(), label: "Active Go".to_string(), value: active_ver },
-                ],
-                relationships: vec![
-                    Relationship { from: "go_mod".to_string(), relation: "requires".to_string(), to: "go_active".to_string() },
-                    Relationship { from: "go_exe".to_string(), relation: "resolves to".to_string(), to: "go_active".to_string() },
-                ],
+                graph: EvidenceGraph::new(
+                    vec![
+                        EvidenceNode { id: "go_mod".to_string(), node_type: "File".to_string(), label: "go.mod".to_string(), value: "".to_string() },
+                        EvidenceNode { id: "go_exe".to_string(), node_type: "Binary".to_string(), label: "go.exe".to_string(), value: go_path },
+                        EvidenceNode { id: "go_active".to_string(), node_type: "Runtime".to_string(), label: "Active Go".to_string(), value: active_ver },
+                    ],
+                    vec![
+                        Relationship { from: "go_mod".to_string(), relation: "requires".to_string(), to: "go_active".to_string() },
+                        Relationship { from: "go_exe".to_string(), relation: "resolves to".to_string(), to: "go_active".to_string() },
+                    ]
+                ),
                 suggestion: None,
             });
         } else {
@@ -316,13 +332,15 @@ pub fn inspect_current_project(json: bool) {
                 severity: Severity::Error,
                 subject: "Go".to_string(),
                 cause: "Go executable is missing on PATH.".to_string(),
-                nodes: vec![
-                    EvidenceNode { id: "go_mod".to_string(), node_type: "File".to_string(), label: "go.mod".to_string(), value: "".to_string() },
-                    EvidenceNode { id: "go_runtime".to_string(), node_type: "Runtime".to_string(), label: "Go".to_string(), value: "Not Found".to_string() },
-                ],
-                relationships: vec![
-                    Relationship { from: "go_mod".to_string(), relation: "requires".to_string(), to: "go_runtime".to_string() },
-                ],
+                graph: EvidenceGraph::new(
+                    vec![
+                        EvidenceNode { id: "go_mod".to_string(), node_type: "File".to_string(), label: "go.mod".to_string(), value: "".to_string() },
+                        EvidenceNode { id: "go_runtime".to_string(), node_type: "Runtime".to_string(), label: "Go".to_string(), value: "Not Found".to_string() },
+                    ],
+                    vec![
+                        Relationship { from: "go_mod".to_string(), relation: "requires".to_string(), to: "go_runtime".to_string() },
+                    ]
+                ),
                 suggestion: Some("Install Go runtime (via scoop install go, or from golang.org).".to_string()),
             });
         }
@@ -340,15 +358,17 @@ pub fn inspect_current_project(json: bool) {
                 severity: Severity::Info,
                 subject: "Java".to_string(),
                 cause: "Java Runtime Environment (JRE) is available.".to_string(),
-                nodes: vec![
-                    EvidenceNode { id: "java_file".to_string(), node_type: "File".to_string(), label: filename.to_string(), value: "".to_string() },
-                    EvidenceNode { id: "java_exe".to_string(), node_type: "Binary".to_string(), label: "java.exe".to_string(), value: java_path },
-                    EvidenceNode { id: "java_active".to_string(), node_type: "Runtime".to_string(), label: "Active Java".to_string(), value: active_ver },
-                ],
-                relationships: vec![
-                    Relationship { from: "java_file".to_string(), relation: "requires".to_string(), to: "java_active".to_string() },
-                    Relationship { from: "java_exe".to_string(), relation: "resolves to".to_string(), to: "java_active".to_string() },
-                ],
+                graph: EvidenceGraph::new(
+                    vec![
+                        EvidenceNode { id: "java_file".to_string(), node_type: "File".to_string(), label: filename.to_string(), value: "".to_string() },
+                        EvidenceNode { id: "java_exe".to_string(), node_type: "Binary".to_string(), label: "java.exe".to_string(), value: java_path },
+                        EvidenceNode { id: "java_active".to_string(), node_type: "Runtime".to_string(), label: "Active Java".to_string(), value: active_ver },
+                    ],
+                    vec![
+                        Relationship { from: "java_file".to_string(), relation: "requires".to_string(), to: "java_active".to_string() },
+                        Relationship { from: "java_exe".to_string(), relation: "resolves to".to_string(), to: "java_active".to_string() },
+                    ]
+                ),
                 suggestion: None,
             });
         } else {
@@ -356,13 +376,15 @@ pub fn inspect_current_project(json: bool) {
                 severity: Severity::Error,
                 subject: "Java".to_string(),
                 cause: "Java executable is missing on PATH.".to_string(),
-                nodes: vec![
-                    EvidenceNode { id: "java_file".to_string(), node_type: "File".to_string(), label: filename.to_string(), value: "".to_string() },
-                    EvidenceNode { id: "java_runtime".to_string(), node_type: "Runtime".to_string(), label: "Java".to_string(), value: "Not Found".to_string() },
-                ],
-                relationships: vec![
-                    Relationship { from: "java_file".to_string(), relation: "requires".to_string(), to: "java_runtime".to_string() },
-                ],
+                graph: EvidenceGraph::new(
+                    vec![
+                        EvidenceNode { id: "java_file".to_string(), node_type: "File".to_string(), label: filename.to_string(), value: "".to_string() },
+                        EvidenceNode { id: "java_runtime".to_string(), node_type: "Runtime".to_string(), label: "Java".to_string(), value: "Not Found".to_string() },
+                    ],
+                    vec![
+                        Relationship { from: "java_file".to_string(), relation: "requires".to_string(), to: "java_runtime".to_string() },
+                    ]
+                ),
                 suggestion: Some("Install a Java Development Kit (via scoop install openjdk, or from oracle/temurin).".to_string()),
             });
         }
@@ -376,10 +398,12 @@ pub fn inspect_current_project(json: bool) {
                 severity: Severity::Info,
                 subject: "Docker".to_string(),
                 cause: "Docker is installed and available.".to_string(),
-                nodes: vec![
-                    EvidenceNode { id: "docker_tool".to_string(), node_type: "Tool".to_string(), label: "Docker Daemon".to_string(), value: "Available".to_string() },
-                ],
-                relationships: vec![],
+                graph: EvidenceGraph::new(
+                    vec![
+                        EvidenceNode { id: "docker_tool".to_string(), node_type: "Tool".to_string(), label: "Docker Daemon".to_string(), value: "Available".to_string() },
+                    ],
+                    vec![]
+                ),
                 suggestion: None,
             });
         } else {
@@ -387,10 +411,12 @@ pub fn inspect_current_project(json: bool) {
                 severity: Severity::Error,
                 subject: "Docker".to_string(),
                 cause: "Docker executable is missing on PATH.".to_string(),
-                nodes: vec![
-                    EvidenceNode { id: "docker_tool".to_string(), node_type: "Tool".to_string(), label: "Docker Daemon".to_string(), value: "Not Found".to_string() },
-                ],
-                relationships: vec![],
+                graph: EvidenceGraph::new(
+                    vec![
+                        EvidenceNode { id: "docker_tool".to_string(), node_type: "Tool".to_string(), label: "Docker Daemon".to_string(), value: "Not Found".to_string() },
+                    ],
+                    vec![]
+                ),
                 suggestion: Some("Install Docker Desktop or Docker engine on your machine.".to_string()),
             });
         }
@@ -430,16 +456,18 @@ pub fn inspect_current_project(json: bool) {
                 severity: Severity::Info,
                 subject: svc.clone(),
                 cause: format!("{} is running and listening on port {}.", svc, port),
-                nodes: vec![
-                    EvidenceNode { id: "compose_file".to_string(), node_type: "File".to_string(), label: filename.to_string(), value: "".to_string() },
-                    EvidenceNode { id: svc_id.clone(), node_type: "Service".to_string(), label: svc.clone(), value: "Defined".to_string() },
-                    EvidenceNode { id: port_id.clone(), node_type: "Port".to_string(), label: format!("Port {}", port), value: "Occupied".to_string() },
-                    EvidenceNode { id: status_id.clone(), node_type: "Status".to_string(), label: "Connection".to_string(), value: "Online / Running".to_string() },
-                ],
-                relationships: vec![
-                    Relationship { from: "compose_file".to_string(), relation: "requires".to_string(), to: svc_id },
-                    Relationship { from: port_id, relation: "binds to".to_string(), to: status_id },
-                ],
+                graph: EvidenceGraph::new(
+                    vec![
+                        EvidenceNode { id: "compose_file".to_string(), node_type: "File".to_string(), label: filename.to_string(), value: "".to_string() },
+                        EvidenceNode { id: svc_id.clone(), node_type: "Service".to_string(), label: svc.clone(), value: "Defined".to_string() },
+                        EvidenceNode { id: port_id.clone(), node_type: "Port".to_string(), label: format!("Port {}", port), value: "Occupied".to_string() },
+                        EvidenceNode { id: status_id.clone(), node_type: "Status".to_string(), label: "Connection".to_string(), value: "Online / Running".to_string() },
+                    ],
+                    vec![
+                        Relationship { from: "compose_file".to_string(), relation: "requires".to_string(), to: svc_id },
+                        Relationship { from: port_id, relation: "binds to".to_string(), to: status_id },
+                    ]
+                ),
                 suggestion: None,
             });
         } else {
@@ -447,16 +475,18 @@ pub fn inspect_current_project(json: bool) {
                 severity: Severity::Error,
                 subject: svc.clone(),
                 cause: format!("{} service is stopped or offline.", svc),
-                nodes: vec![
-                    EvidenceNode { id: "compose_file".to_string(), node_type: "File".to_string(), label: filename.to_string(), value: "".to_string() },
-                    EvidenceNode { id: svc_id.clone(), node_type: "Service".to_string(), label: svc.clone(), value: "Defined".to_string() },
-                    EvidenceNode { id: port_id.clone(), node_type: "Port".to_string(), label: format!("Port {}", port), value: "Free".to_string() },
-                    EvidenceNode { id: status_id.clone(), node_type: "Status".to_string(), label: "Connection".to_string(), value: "Offline / Stopped".to_string() },
-                ],
-                relationships: vec![
-                    Relationship { from: "compose_file".to_string(), relation: "requires".to_string(), to: svc_id },
-                    Relationship { from: port_id, relation: "binds to".to_string(), to: status_id },
-                ],
+                graph: EvidenceGraph::new(
+                    vec![
+                        EvidenceNode { id: "compose_file".to_string(), node_type: "File".to_string(), label: filename.to_string(), value: "".to_string() },
+                        EvidenceNode { id: svc_id.clone(), node_type: "Service".to_string(), label: svc.clone(), value: "Defined".to_string() },
+                        EvidenceNode { id: port_id.clone(), node_type: "Port".to_string(), label: format!("Port {}", port), value: "Free".to_string() },
+                        EvidenceNode { id: status_id.clone(), node_type: "Status".to_string(), label: "Connection".to_string(), value: "Offline / Stopped".to_string() },
+                    ],
+                    vec![
+                        Relationship { from: "compose_file".to_string(), relation: "requires".to_string(), to: svc_id },
+                        Relationship { from: port_id, relation: "binds to".to_string(), to: status_id },
+                    ]
+                ),
                 suggestion: Some(format!("Start the database container: run `docker compose up -d {}`", svc.to_lowercase())),
             });
         }
@@ -481,8 +511,7 @@ pub fn inspect_current_project(json: bool) {
                 severity: Severity::Error,
                 subject: "Configuration (.env)".to_string(),
                 cause: "Required database configuration parameters are missing in your environment file.".to_string(),
-                nodes,
-                relationships,
+                graph: EvidenceGraph::new(nodes, relationships),
                 suggestion: Some("Add the missing variables to your .env file with correct connection strings.".to_string()),
             });
         }
