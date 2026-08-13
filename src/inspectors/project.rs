@@ -7,6 +7,7 @@ use serde::Deserialize;
 use crate::resolver::path::find_all_in_path;
 use crate::platform::find_services;
 use crate::inspectors::executable::query_version;
+use crate::inspectors::finding::{Finding, Severity, Evidence};
 
 #[derive(Deserialize, Debug)]
 struct PackageJson {
@@ -63,12 +64,24 @@ fn get_docker_compose_services(path: &Path) -> Vec<String> {
     services
 }
 
-/// Scans the current directory to diagnose project environment dependencies.
-pub fn inspect_current_project() {
+/// Helper to get the required node version string from package.json.
+fn get_node_engine_requirement(project_dir: &Path) -> Option<String> {
+    let pkg_json_path = project_dir.join("package.json");
+    let content = fs::read_to_string(pkg_json_path).ok()?;
+    let pkg: PackageJson = serde_json::from_str(&content).ok()?;
+    pkg.engines?.node
+}
+
+/// Scans the current directory to diagnose project environment dependencies using the Finding model.
+pub fn inspect_current_project(json: bool) {
     let current_dir = match env::current_dir() {
         Ok(d) => d,
         Err(e) => {
-            println!("\x1b[31mError retrieving current directory: {}\x1b[0m", e);
+            if json {
+                println!("[]");
+            } else {
+                println!("\x1b[31mError retrieving current directory: {}\x1b[0m", e);
+            }
             return;
         }
     };
@@ -115,8 +128,12 @@ pub fn inspect_current_project() {
     }
 
     if files.is_empty() {
-        println!("\nNo project files (package.json, pom.xml, requirements.txt, Cargo.toml, etc.) found in this directory.");
-        println!("Run 'why project' inside a codebase directory.");
+        if json {
+            println!("[]");
+        } else {
+            println!("\nNo project files (package.json, pom.xml, requirements.txt, Cargo.toml, etc.) found in this directory.");
+            println!("Run 'why project' inside a codebase directory.");
+        }
         return;
     }
 
@@ -126,16 +143,10 @@ pub fn inspect_current_project() {
         files.push(".env".to_string());
     }
 
-    let mut check_failed = false;
-    let mut reasons = Vec::new();
-
-    println!("\n\x1b[1mProject: {}\x1b[0m", project_name);
+    let mut findings = Vec::new();
 
     // 1. Node.js check
     if files.contains(&"package.json".to_string()) {
-        println!("\nNode.js");
-        println!(" ├─ required by package.json");
-        
         let (resolved, _) = find_all_in_path("node");
         if let Some(res) = resolved.first() {
             let active_ver = query_version(&res.resolved_path).unwrap_or_else(|| "unknown".to_string());
@@ -143,20 +154,41 @@ pub fn inspect_current_project() {
             
             match constraint {
                 Some(ref_err) => {
-                    println!(" ├─ active version: {}", active_ver);
-                    println!(" └─ \x1b[33m⚠ VERSION MISMATCH: {}\x1b[0m", ref_err);
-                    check_failed = true;
-                    reasons.push(format!("Node.js version conflict: {}", ref_err));
+                    findings.push(Finding {
+                        severity: Severity::Error,
+                        subject: "Node.js".to_string(),
+                        cause: format!("Active Node.js version does not satisfy package.json requirement: {}", ref_err),
+                        evidence: vec![
+                            Evidence { label: "Required".to_string(), value: get_node_engine_requirement(&current_dir).unwrap_or_default() },
+                            Evidence { label: "Active".to_string(), value: active_ver },
+                            Evidence { label: "Resolved".to_string(), value: res.resolved_path.to_string_lossy().to_string() },
+                        ],
+                        suggestion: Some("Switch Node version to satisfy the constraint using your node manager (nvm, fnm, or scoop).".to_string()),
+                    });
                 }
                 None => {
-                    println!(" ├─ active version: {}", active_ver);
-                    println!(" └─ \x1b[32m✓ available\x1b[0m");
+                    findings.push(Finding {
+                        severity: Severity::Info,
+                        subject: "Node.js".to_string(),
+                        cause: "Node.js environment matches project requirement.".to_string(),
+                        evidence: vec![
+                            Evidence { label: "Required".to_string(), value: get_node_engine_requirement(&current_dir).unwrap_or_else(|| ">=18".to_string()) },
+                            Evidence { label: "Active".to_string(), value: active_ver },
+                        ],
+                        suggestion: None,
+                    });
                 }
             }
         } else {
-            println!(" └─ \x1b[31m✗ node executable not found on PATH\x1b[0m");
-            check_failed = true;
-            reasons.push("Missing runtime: Node.js is required but not installed.".to_string());
+            findings.push(Finding {
+                severity: Severity::Error,
+                subject: "Node.js".to_string(),
+                cause: "Node.js runtime is missing on PATH.".to_string(),
+                evidence: vec![
+                    Evidence { label: "Required by".to_string(), value: "package.json".to_string() },
+                ],
+                suggestion: Some("Install Node.js (via scoop install nodejs, fnm, or directly from nodejs.org).".to_string()),
+            });
         }
     }
 
@@ -164,49 +196,85 @@ pub fn inspect_current_project() {
     let py_file = ["requirements.txt", "pyproject.toml", "pipfile"].iter()
         .find(|f| files.contains(&f.to_string()));
     if let Some(filename) = py_file {
-        println!("\nPython");
-        println!(" ├─ required by {}", filename);
         let (resolved, _) = find_all_in_path("python");
         if let Some(res) = resolved.first() {
             let active_ver = query_version(&res.resolved_path).unwrap_or_else(|| "unknown".to_string());
-            println!(" ├─ active version: {}", active_ver);
-            println!(" └─ \x1b[32m✓ available\x1b[0m");
+            findings.push(Finding {
+                severity: Severity::Info,
+                subject: "Python".to_string(),
+                cause: "Python runtime is available.".to_string(),
+                evidence: vec![
+                    Evidence { label: "Required by".to_string(), value: filename.to_string() },
+                    Evidence { label: "Active version".to_string(), value: active_ver },
+                ],
+                suggestion: None,
+            });
         } else {
-            println!(" └─ \x1b[31m✗ python executable not found on PATH\x1b[0m");
-            check_failed = true;
-            reasons.push("Missing runtime: Python is required but not installed.".to_string());
+            findings.push(Finding {
+                severity: Severity::Error,
+                subject: "Python".to_string(),
+                cause: "Python executable is missing on PATH.".to_string(),
+                evidence: vec![
+                    Evidence { label: "Required by".to_string(), value: filename.to_string() },
+                ],
+                suggestion: Some("Install Python (via scoop install python, or download from python.org).".to_string()),
+            });
         }
     }
 
     // 3. Rust check
     if files.contains(&"Cargo.toml".to_string()) {
-        println!("\nRust");
-        println!(" ├─ required by Cargo.toml");
         let (resolved, _) = find_all_in_path("cargo");
         if let Some(res) = resolved.first() {
             let active_ver = query_version(&res.resolved_path).unwrap_or_else(|| "unknown".to_string());
-            println!(" ├─ active version: {}", active_ver);
-            println!(" └─ \x1b[32m✓ available\x1b[0m");
+            findings.push(Finding {
+                severity: Severity::Info,
+                subject: "Rust".to_string(),
+                cause: "Rust toolchain is active and available.".to_string(),
+                evidence: vec![
+                    Evidence { label: "Required by".to_string(), value: "Cargo.toml".to_string() },
+                    Evidence { label: "Active version".to_string(), value: active_ver },
+                ],
+                suggestion: None,
+            });
         } else {
-            println!(" └─ \x1b[31m✗ cargo executable not found on PATH\x1b[0m");
-            check_failed = true;
-            reasons.push("Missing toolchain: Rust (cargo) is required but not installed.".to_string());
+            findings.push(Finding {
+                severity: Severity::Error,
+                subject: "Rust".to_string(),
+                cause: "Cargo executable is missing on PATH.".to_string(),
+                evidence: vec![
+                    Evidence { label: "Required by".to_string(), value: "Cargo.toml".to_string() },
+                ],
+                suggestion: Some("Install Rust toolchain using rustup (from https://rustup.rs).".to_string()),
+            });
         }
     }
 
     // 4. Go check
     if files.contains(&"go.mod".to_string()) {
-        println!("\nGo");
-        println!(" ├─ required by go.mod");
         let (resolved, _) = find_all_in_path("go");
         if let Some(res) = resolved.first() {
             let active_ver = query_version(&res.resolved_path).unwrap_or_else(|| "unknown".to_string());
-            println!(" ├─ active version: {}", active_ver);
-            println!(" └─ \x1b[32m✓ available\x1b[0m");
+            findings.push(Finding {
+                severity: Severity::Info,
+                subject: "Go".to_string(),
+                cause: "Go runtime is available.".to_string(),
+                evidence: vec![
+                    Evidence { label: "Required by".to_string(), value: "go.mod".to_string() },
+                    Evidence { label: "Active version".to_string(), value: active_ver },
+                ],
+                suggestion: None,
+            });
         } else {
-            println!(" └─ \x1b[31m✗ go executable not found on PATH\x1b[0m");
-            check_failed = true;
-            reasons.push("Missing runtime: Go is required but not installed.".to_string());
+            findings.push(Finding {
+                severity: Severity::Error,
+                subject: "Go".to_string(),
+                cause: "Go executable is missing on PATH.".to_string(),
+                evidence: vec![
+                    Evidence { label: "Required by".to_string(), value: "go.mod".to_string() },
+                ],
+                suggestion: Some("Install Go runtime (via scoop install go, or from golang.org).".to_string()),
+            });
         }
     }
 
@@ -214,44 +282,60 @@ pub fn inspect_current_project() {
     let java_file = ["pom.xml", "build.gradle"].iter()
         .find(|f| files.contains(&f.to_string()));
     if let Some(filename) = java_file {
-        println!("\nJava");
-        println!(" ├─ required by {}", filename);
         let (resolved, _) = find_all_in_path("java");
         if let Some(res) = resolved.first() {
             let active_ver = query_version(&res.resolved_path).unwrap_or_else(|| "unknown".to_string());
-            println!(" ├─ active version: {}", active_ver);
-            println!(" └─ \x1b[32m✓ available\x1b[0m");
+            findings.push(Finding {
+                severity: Severity::Info,
+                subject: "Java".to_string(),
+                cause: "Java Runtime Environment (JRE) is available.".to_string(),
+                evidence: vec![
+                    Evidence { label: "Required by".to_string(), value: filename.to_string() },
+                    Evidence { label: "Active version".to_string(), value: active_ver },
+                ],
+                suggestion: None,
+            });
         } else {
-            println!(" └─ \x1b[31m✗ java executable not found on PATH\x1b[0m");
-            check_failed = true;
-            reasons.push("Missing runtime: Java (JDK) is required but not installed.".to_string());
+            findings.push(Finding {
+                severity: Severity::Error,
+                subject: "Java".to_string(),
+                cause: "Java executable is missing on PATH.".to_string(),
+                evidence: vec![
+                    Evidence { label: "Required by".to_string(), value: filename.to_string() },
+                ],
+                suggestion: Some("Install a Java Development Kit (via scoop install openjdk, or from oracle/temurin).".to_string()),
+            });
         }
     }
 
     // 6. Docker check
     if toolchain.contains(&"Docker Compose".to_string()) || toolchain.contains(&"Docker".to_string()) {
-        println!("\nDocker");
-        println!(" ├─ required by project files");
         let (resolved, _) = find_all_in_path("docker");
         if !resolved.is_empty() {
-            println!(" └─ \x1b[32m✓ available\x1b[0m");
+            findings.push(Finding {
+                severity: Severity::Info,
+                subject: "Docker".to_string(),
+                cause: "Docker is installed and available.".to_string(),
+                evidence: vec![
+                    Evidence { label: "Required by".to_string(), value: "Project container setup".to_string() },
+                ],
+                suggestion: None,
+            });
         } else {
-            println!(" └─ \x1b[31m✗ docker executable not found on PATH\x1b[0m");
-            check_failed = true;
-            reasons.push("Missing toolchain: Docker is required but not installed.".to_string());
+            findings.push(Finding {
+                severity: Severity::Error,
+                subject: "Docker".to_string(),
+                cause: "Docker executable is missing on PATH.".to_string(),
+                evidence: vec![
+                    Evidence { label: "Required by".to_string(), value: "Project container setup".to_string() },
+                ],
+                suggestion: Some("Install Docker Desktop or Docker engine on your machine.".to_string()),
+            });
         }
     }
 
     // 7. Services check
     for svc in &required_services {
-        println!("\n{}", svc);
-        let filename = if files.contains(&"docker-compose.yml".to_string()) {
-            "docker-compose.yml"
-        } else {
-            "docker-compose.yaml"
-        };
-        println!(" ├─ required by {}", filename);
-        
         let port = match svc.as_str() {
             "PostgreSQL" => 5432,
             "MySQL" => 3306,
@@ -259,10 +343,6 @@ pub fn inspect_current_project() {
             "MongoDB" => 27017,
             _ => 0,
         };
-        
-        if port != 0 {
-            println!(" ├─ port: {}", port);
-        }
 
         let matches = find_services(&svc.to_lowercase());
         let is_running = matches.iter().any(|s| s.contains("(Running)"));
@@ -273,15 +353,34 @@ pub fn inspect_current_project() {
             false
         };
 
-        if is_running || is_port_occupied {
-            println!(" └─ \x1b[32m✓ running\x1b[0m");
+        let filename = if files.contains(&"docker-compose.yml".to_string()) {
+            "docker-compose.yml"
         } else {
-            println!(" └─ \x1b[31m✗ stopped or offline\x1b[0m");
-            check_failed = true;
-            reasons.push(format!(
-                "{} is stopped or offline. Suggested fix: run `docker compose up -d {}`",
-                svc, svc.to_lowercase()
-            ));
+            "docker-compose.yaml"
+        };
+
+        if is_running || is_port_occupied {
+            findings.push(Finding {
+                severity: Severity::Info,
+                subject: svc.clone(),
+                cause: format!("{} is running and listening on port {}.", svc, port),
+                evidence: vec![
+                    Evidence { label: "Required by".to_string(), value: filename.to_string() },
+                    Evidence { label: "Port".to_string(), value: port.to_string() },
+                ],
+                suggestion: None,
+            });
+        } else {
+            findings.push(Finding {
+                severity: Severity::Error,
+                subject: svc.clone(),
+                cause: format!("{} service is stopped or offline.", svc),
+                evidence: vec![
+                    Evidence { label: "Required by".to_string(), value: filename.to_string() },
+                    Evidence { label: "Port".to_string(), value: port.to_string() },
+                ],
+                suggestion: Some(format!("Start the database container: run `docker compose up -d {}`", svc.to_lowercase())),
+            });
         }
     }
 
@@ -289,30 +388,49 @@ pub fn inspect_current_project() {
     if !required_services.is_empty() {
         let missing_env_vars = check_env_configuration(&env_file_path, &required_services);
         if !missing_env_vars.is_empty() {
-            println!("\nConfiguration (.env)");
-            if has_env {
-                println!(" ├─ .env file detected");
-            } else {
-                println!(" ├─ \x1b[33m⚠ .env file missing\x1b[0m");
-            }
+            let mut evidence = vec![
+                Evidence { label: "Status".to_string(), value: if has_env { ".env file detected" } else { ".env file missing" }.to_string() }
+            ];
             for var in &missing_env_vars {
-                println!(" └─ \x1b[31m✗ {} is missing\x1b[0m", var);
-                check_failed = true;
-                reasons.push(format!("Configuration error: {} is missing in .env", var));
+                evidence.push(Evidence { label: "Missing variable".to_string(), value: var.clone() });
             }
+            
+            findings.push(Finding {
+                severity: Severity::Error,
+                subject: "Configuration (.env)".to_string(),
+                cause: "Required database configuration parameters are missing in your environment file.".to_string(),
+                evidence,
+                suggestion: Some("Add the missing variables to your .env file with correct connection strings.".to_string()),
+            });
         }
     }
 
-    if check_failed {
-        println!("\n\x1b[31m\x1b[1m✗ Project environment is incompatible.\x1b[0m");
-        println!("\n\x1b[1mPrimary reason(s):\x1b[0m");
-        for r in &reasons {
-            println!("  - {}", r);
+    if json {
+        if let Ok(json_str) = serde_json::to_string_pretty(&findings) {
+            println!("{}", json_str);
+        } else {
+            println!("[]");
         }
     } else {
-        println!("\n\x1b[32m\x1b[1m✓ Project environment is healthy and compatible!\x1b[0m");
+        println!("\n\x1b[1mProject: {}\x1b[0m", project_name);
+        for finding in &findings {
+            finding.print_terminal();
+        }
+
+        let has_errors = findings.iter().any(|f| f.severity == Severity::Error);
+        if has_errors {
+            println!("\n\x1b[31m\x1b[1m✗ Project environment is incompatible.\x1b[0m");
+            println!("\n\x1b[1mPrimary reason(s):\x1b[0m");
+            for f in &findings {
+                if f.severity == Severity::Error {
+                    println!("  - {}: {}", f.subject, f.cause);
+                }
+            }
+        } else {
+            println!("\n\x1b[32m\x1b[1m✓ Project environment is healthy and compatible!\x1b[0m");
+        }
+        println!();
     }
-    println!();
 }
 
 fn check_env_configuration(env_path: &Path, services: &[String]) -> Vec<String> {

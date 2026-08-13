@@ -18,7 +18,7 @@ fn main() {
                 return;
             }
             Commands::Project => {
-                inspectors::project::inspect_current_project();
+                inspectors::project::inspect_current_project(cli.json);
                 return;
             }
             Commands::Env { name } => {
@@ -31,7 +31,7 @@ fn main() {
     // 2. Route based on positional query
     if let Some(query) = cli.query {
         if query == "." || query.to_lowercase() == "project" {
-            inspectors::project::inspect_current_project();
+            inspectors::project::inspect_current_project(cli.json);
             return;
         }
 
@@ -51,6 +51,6 @@ fn main() {
         }
     } else {
         // Default when run with no arguments: inspect the current directory project
-        inspectors::project::inspect_current_project();
+        inspectors::project::inspect_current_project(cli.json);
     }
 }
