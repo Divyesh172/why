@@ -1,4 +1,4 @@
-use crate::platform::windows::find_services;
+use crate::platform::find_services;
 
 /// Prints running services matching the query.
 pub fn print_services_report(query: &str) {
