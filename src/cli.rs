@@ -19,6 +19,10 @@ pub struct Cli {
     #[arg(long)]
     pub show_env: bool,
 
+    /// Output report in structured JSON format.
+    #[arg(long)]
+    pub json: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -32,4 +36,9 @@ pub enum Commands {
     },
     /// Inspect the project in the current directory
     Project,
+    /// View a specific environment variable's value safely (e.g., "why env GITHUB_TOKEN")
+    Env {
+        /// Name of the environment variable to retrieve
+        name: String,
+    },
 }

@@ -21,6 +21,10 @@ fn main() {
                 inspectors::project::inspect_current_project();
                 return;
             }
+            Commands::Env { name } => {
+                inspectors::environment::print_single_env(&name);
+                return;
+            }
         }
     }
 
@@ -40,7 +44,7 @@ fn main() {
         // Try to resolve as an executable on PATH
         let (resolved, _) = resolver::path::find_all_in_path(&query);
         if !resolved.is_empty() {
-            inspectors::executable::print_executable_report(&query, cli.all, cli.conflict, cli.show_env);
+            inspectors::executable::print_executable_report(&query, cli.all, cli.conflict, cli.show_env, cli.json);
         } else {
             // Fallback: Check if it matches a running process name (like "chrome")
             inspectors::process::inspect_process(&query);

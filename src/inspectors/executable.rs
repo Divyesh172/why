@@ -22,12 +22,21 @@ pub struct InstallationInfo {
 }
 
 /// Core function that prints executable details based on flags.
-pub fn print_executable_report(query: &str, all: bool, conflict: bool, show_env: bool) {
+pub fn print_executable_report(query: &str, all: bool, conflict: bool, show_env: bool, json: bool) {
     let query_clean = query.trim_end_matches(".exe").to_lowercase();
     let (all_results, search_order) = find_all_in_path(query);
 
     if all_results.is_empty() {
-        println!("\n{}{}Could not resolve executable '{}' in system PATH.{}", BOLD, YELLOW, query, RESET);
+        if json {
+            println!("{{}}");
+        } else {
+            println!("\n{}{}Could not resolve executable '{}' in system PATH.{}", BOLD, YELLOW, query, RESET);
+        }
+        return;
+    }
+
+    if json {
+        print_executable_json(&query_clean, &all_results);
         return;
     }
 
@@ -166,6 +175,34 @@ fn print_path_search_order(_query: &str, search_order: &[SearchOrderEntry]) {
     }
 }
 
+fn share_installation_root(path_a: &Path, path_b: &Path) -> bool {
+    let a = match path_a.canonicalize() {
+        Ok(p) => p,
+        Err(_) => path_a.to_path_buf(),
+    };
+    let b = match path_b.canonicalize() {
+        Ok(p) => p,
+        Err(_) => path_b.to_path_buf(),
+    };
+
+    if let (Some(pa), Some(pb)) = (a.parent(), b.parent()) {
+        if pa == pb {
+            return true;
+        }
+        if let Some(gpa) = pa.parent() {
+            if gpa == pb || Some(gpa) == pb.parent() {
+                return true;
+            }
+        }
+        if let Some(gpb) = pb.parent() {
+            if gpb == pa || Some(gpb) == pa.parent() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn print_conflict_diagnostics(query_name: &str, active_path: &Path, all_results: &[PathSearchResult]) {
     println!("\n{}{}=== Conflict Diagnostics ==={}", BOLD, YELLOW, RESET);
     
@@ -181,14 +218,7 @@ fn print_conflict_diagnostics(query_name: &str, active_path: &Path, all_results:
     if query_name == "node" {
         let (npm_res, _) = find_all_in_path("npm");
         if let Some(npm) = npm_res.first() {
-            let node_dir_str = active_path.to_string_lossy().to_lowercase();
-            let npm_dir_str = npm.resolved_path.to_string_lossy().to_lowercase();
-            
-            let both_fnm = node_dir_str.contains("fnm_multishells") && npm_dir_str.contains("fnm_multishells");
-            let both_scoop = node_dir_str.contains("scoop") && npm_dir_str.contains("scoop");
-            let both_program_files = node_dir_str.contains("program files") && npm_dir_str.contains("program files");
-            
-            if !both_fnm && !both_scoop && !both_program_files {
+            if !share_installation_root(active_path, &npm.resolved_path) {
                 println!("  \x1b[31m⚠ Conflict: npm resolves to a different installation than node.\x1b[0m");
                 println!("    node: {}", active_path.display());
                 println!("    npm:  {}", npm.resolved_path.display());
@@ -199,13 +229,7 @@ fn print_conflict_diagnostics(query_name: &str, active_path: &Path, all_results:
     } else if query_name == "python" {
         let (pip_res, _) = find_all_in_path("pip");
         if let Some(pip) = pip_res.first() {
-            let py_dir_str = active_path.to_string_lossy().to_lowercase();
-            let pip_dir_str = pip.resolved_path.to_string_lossy().to_lowercase();
-            
-            let both_scoop = py_dir_str.contains("scoop") && pip_dir_str.contains("scoop");
-            let both_python_install = py_dir_str.contains("python") && pip_dir_str.contains("python");
-            
-            if !both_scoop && !both_python_install {
+            if !share_installation_root(active_path, &pip.resolved_path) {
                 println!("  \x1b[31m⚠ Conflict: pip resolves to a different installation than python.\x1b[0m");
                 println!("    python: {}", active_path.display());
                 println!("    pip:    {}", pip.resolved_path.display());
@@ -383,4 +407,49 @@ fn scan_projects(query: &str) -> Vec<PathBuf> {
     }
     
     matching_projects
+}
+
+fn print_executable_json(query: &str, results: &[PathSearchResult]) {
+    if results.is_empty() {
+        println!("{{}}");
+        return;
+    }
+    
+    let active = &results[0];
+    let version = query_version(&active.resolved_path).unwrap_or_default();
+    let install_info = detect_installation_source(&active.resolved_path);
+    let installations_count = results.len();
+    
+    let mut conflicts = Vec::new();
+    if installations_count > 1 {
+        conflicts.push(format!("\"Multiple {} installations detected\"", query));
+    }
+    
+    if query == "node" {
+        let (npm_res, _) = find_all_in_path("npm");
+        if let Some(npm) = npm_res.first() {
+            if !share_installation_root(&active.resolved_path, &npm.resolved_path) {
+                conflicts.push("\"npm resolves to a different installation than node\"".to_string());
+            }
+        }
+    } else if query == "python" {
+        let (pip_res, _) = find_all_in_path("pip");
+        if let Some(pip) = pip_res.first() {
+            if !share_installation_root(&active.resolved_path, &pip.resolved_path) {
+                conflicts.push("\"pip resolves to a different installation than python\"".to_string());
+            }
+        }
+    }
+    
+    println!("{{");
+    println!("  \"name\": \"{}\",", query);
+    println!("  \"resolved\": \"{}\",", active.resolved_path.display().to_string().replace('\\', "\\\\"));
+    if active.is_shim {
+        println!("  \"shim\": \"{}\",", active.original_path.display().to_string().replace('\\', "\\\\"));
+    }
+    println!("  \"version\": \"{}\",", version);
+    println!("  \"manager\": \"{}\",", install_info.manager.to_lowercase());
+    println!("  \"installations\": {},", installations_count);
+    println!("  \"conflicts\": [{}]", conflicts.join(", "));
+    println!("}}");
 }

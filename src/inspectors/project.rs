@@ -1,7 +1,9 @@
 use std::env;
 use std::fs;
+use std::path::Path;
 use crate::resolver::path::find_all_in_path;
 use crate::platform::windows::find_services;
+use crate::inspectors::executable::query_version;
 
 /// Scans the current directory to diagnose project environment dependencies.
 pub fn inspect_current_project() {
@@ -48,7 +50,7 @@ pub fn inspect_current_project() {
                 toolchain.push(tool.to_string());
             }
 
-            // If docker compose is present, check for standard databases/services
+            // Docker Compose parsing
             if *filename == "docker-compose.yml" || *filename == "docker-compose.yaml" {
                 if let Ok(content) = fs::read_to_string(path) {
                     let content_lower = content.to_lowercase();
@@ -71,8 +73,15 @@ pub fn inspect_current_project() {
 
     if files.is_empty() {
         println!("\nNo project files (package.json, pom.xml, requirements.txt, Cargo.toml, etc.) found in this directory.");
-        println!("Run 'why project' or 'why .' inside a codebase directory.");
+        println!("Run 'why project' inside a codebase directory.");
         return;
+    }
+
+    // Check if .env file exists and add to listing
+    let env_file_path = current_dir.join(".env");
+    let has_env = env_file_path.is_file();
+    if has_env {
+        files.push(".env".to_string());
     }
 
     println!("\n\x1b[1mLanguages:\x1b[0m\n  {}", languages.join(", "));
@@ -80,7 +89,8 @@ pub fn inspect_current_project() {
     
     println!("\n\x1b[1mFiles:\x1b[0m");
     for f in &files {
-        println!("  - {}", f);
+        let env_marker = if f == ".env" { " (found)" } else { "" };
+        println!("  - {}{}", f, env_marker);
     }
 
     println!("\n\x1b[1mEnvironment Check:\x1b[0m");
@@ -100,8 +110,18 @@ pub fn inspect_current_project() {
 
         if !exe_name.is_empty() {
             let (resolved, _) = find_all_in_path(exe_name);
-            if !resolved.is_empty() {
-                println!("  \x1b[32m✓ {}\x1b[0m", lang);
+            if let Some(res) = resolved.first() {
+                // Verify package.json engines constraints for Node
+                if lang == "JavaScript/TypeScript" {
+                    if let Some(warn) = check_node_version_requirement(&current_dir, &res.resolved_path) {
+                        println!("  \x1b[33m⚠ JavaScript/TypeScript\x1b[0m ({})", warn);
+                        issues.push(warn);
+                    } else {
+                        println!("  \x1b[32m✓ JavaScript/TypeScript\x1b[0m");
+                    }
+                } else {
+                    println!("  \x1b[32m✓ {}\x1b[0m", lang);
+                }
             } else {
                 println!("  \x1b[31m✗ {}\x1b[0m (executable '{}' not found)", lang, exe_name);
                 check_failed = true;
@@ -144,6 +164,15 @@ pub fn inspect_current_project() {
         }
     }
 
+    // 4. Verify Configuration (.env checks)
+    if !required_services.is_empty() {
+        let missing_env_vars = check_env_configuration(&env_file_path, &required_services);
+        for var in &missing_env_vars {
+            check_failed = true;
+            issues.push(format!("Configuration error: {} is missing in .env", var));
+        }
+    }
+
     if check_failed {
         println!("\n\x1b[33m\x1b[1m⚠ Project may not start.\x1b[0m");
         println!("\n\x1b[1mReason(s):\x1b[0m");
@@ -154,4 +183,84 @@ pub fn inspect_current_project() {
         println!("\n\x1b[32m\x1b[1m✓ Environment looks healthy. Ready to build/start!\x1b[0m");
     }
     println!();
+}
+
+fn check_env_configuration(env_path: &Path, services: &[String]) -> Vec<String> {
+    let mut missing = Vec::new();
+    let content = match fs::read_to_string(env_path) {
+        Ok(c) => c,
+        Err(_) => {
+            for svc in services {
+                if svc == "PostgreSQL" || svc == "MySQL" {
+                    missing.push("DATABASE_URL".to_string());
+                } else if svc == "MongoDB" {
+                    missing.push("MONGO_URI".to_string());
+                } else if svc == "Redis" {
+                    missing.push("REDIS_URL".to_string());
+                }
+            }
+            return missing;
+        }
+    };
+
+    for svc in services {
+        let expected_key = match svc.as_str() {
+            "PostgreSQL" | "MySQL" => "DATABASE_URL",
+            "Redis" => "REDIS_URL",
+            "MongoDB" => "MONGO_URI",
+            _ => "",
+        };
+
+        if !expected_key.is_empty() {
+            let key_pattern = format!("{}=", expected_key);
+            let has_key = content.lines().any(|l| l.trim().starts_with(&key_pattern));
+            if !has_key {
+                missing.push(expected_key.to_string());
+            }
+        }
+    }
+
+    missing
+}
+
+fn check_node_version_requirement(project_dir: &Path, node_path: &Path) -> Option<String> {
+    let pkg_json_path = project_dir.join("package.json");
+    let content = fs::read_to_string(pkg_json_path).ok()?;
+    
+    let engines_idx = content.find("\"engines\"")?;
+    let content_after = &content[engines_idx..];
+    let node_idx = content_after.find("\"node\"")?;
+    let line_after_node = &content_after[node_idx..];
+    
+    let start_quote = line_after_node.find(':')? + 1;
+    let rest = &line_after_node[start_quote..];
+    let val_start = rest.find('"')? + 1;
+    let val_end = rest[val_start..].find('"')? + val_start;
+    let req_version = rest[val_start..val_end].trim();
+
+    let active_version = query_version(node_path)?;
+    let clean_active = active_version.trim_start_matches('v');
+    
+    if req_version.starts_with(">=") {
+        let req_num_str = req_version.trim_start_matches(">=").trim();
+        let req_major = req_num_str.split('.').next()?.parse::<u32>().ok()?;
+        let active_major = clean_active.split('.').next()?.parse::<u32>().ok()?;
+        if active_major < req_major {
+            return Some(format!(
+                "Node version mismatch: active is {} but package.json requires {}",
+                active_version, req_version
+            ));
+        }
+    } else if req_version.starts_with('^') {
+        let req_num_str = req_version.trim_start_matches('^').trim();
+        let req_major = req_num_str.split('.').next()?.parse::<u32>().ok()?;
+        let active_major = clean_active.split('.').next()?.parse::<u32>().ok()?;
+        if active_major != req_major {
+            return Some(format!(
+                "Node version mismatch: active is {} but package.json requires {}",
+                active_version, req_version
+            ));
+        }
+    }
+    None
 }
