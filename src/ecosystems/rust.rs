@@ -1,4 +1,5 @@
-#![allow(dead_code)]`nuse crate::resolver::path::find_all_in_path;
+#![allow(dead_code)]
+use crate::resolver::path::find_all_in_path;
 
 /// Prints associated Rust tools.
 pub fn print_rust_details() {
