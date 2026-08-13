@@ -20,9 +20,18 @@ impl Severity {
 }
 
 #[derive(Debug, Serialize, Clone)]
-pub struct Evidence {
+pub struct EvidenceNode {
+    pub id: String,
+    pub node_type: String, // e.g. "File", "Constraint", "Runtime", "Binary", "Service", "Port"
     pub label: String,
     pub value: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct Relationship {
+    pub from: String,
+    pub relation: String,
+    pub to: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -30,12 +39,13 @@ pub struct Finding {
     pub severity: Severity,
     pub subject: String,
     pub cause: String,
-    pub evidence: Vec<Evidence>,
+    pub nodes: Vec<EvidenceNode>,
+    pub relationships: Vec<Relationship>,
     pub suggestion: Option<String>,
 }
 
 impl Finding {
-    /// Renders the finding to stdout as a formatted hierarchy tree branch.
+    /// Walk and render the evidence graph relationships topologically as a sequential flow chart.
     pub fn print_terminal(&self) {
         let severity_color = match self.severity {
             Severity::Info => "\x1b[32m[Info]\x1b[0m",
@@ -44,20 +54,57 @@ impl Finding {
         };
 
         println!("\n\x1b[1m{} {}\x1b[0m", self.subject, severity_color);
-        println!(" ├─ cause: {}", self.cause);
+        println!("  Cause: {}", self.cause);
         
-        let evidence_len = self.evidence.len();
-        for (i, ev) in self.evidence.iter().enumerate() {
-            let prefix = if i == evidence_len - 1 && self.suggestion.is_none() {
-                " └─"
-            } else {
-                " ├─"
-            };
-            println!("{} {}: {}", prefix, ev.label, ev.value);
+        println!("  Evidence Graph:");
+        let mut printed_nodes = std::collections::HashSet::new();
+
+        // 1. Identify all source nodes (no incoming relationships) and trace forward
+        for node in &self.nodes {
+            let has_incoming = self.relationships.iter().any(|r| r.to == node.id);
+            if !has_incoming {
+                let mut current_id = node.id.clone();
+                let val_suffix = if node.value.is_empty() {
+                    "".to_string()
+                } else {
+                    format!(" ({})", node.value)
+                };
+                println!("    {} [{}]{}", node.label, node.node_type, val_suffix);
+                printed_nodes.insert(current_id.clone());
+                
+                // Follow the outgoing chain
+                while let Some(rel) = self.relationships.iter().find(|r| r.from == current_id) {
+                    if let Some(next_node) = self.nodes.iter().find(|n| n.id == rel.to) {
+                        println!("      \x1b[35m↓ {}\x1b[0m", rel.relation);
+                        let next_val_suffix = if next_node.value.is_empty() {
+                            "".to_string()
+                        } else {
+                            format!(" ({})", next_node.value)
+                        };
+                        println!("    {} [{}]{}", next_node.label, next_node.node_type, next_val_suffix);
+                        current_id = next_node.id.clone();
+                        printed_nodes.insert(current_id.clone());
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // 2. Print any remaining disconnected nodes
+        for node in &self.nodes {
+            if !printed_nodes.contains(&node.id) {
+                let val_suffix = if node.value.is_empty() {
+                    "".to_string()
+                } else {
+                    format!(" ({})", node.value)
+                };
+                println!("    {} [{}]{}", node.label, node.node_type, val_suffix);
+            }
         }
 
         if let Some(ref sug) = self.suggestion {
-            println!(" └─ suggestion: \x1b[36m{}\x1b[0m", sug);
+            println!("  Suggestion: \x1b[36m{}\x1b[0m", sug);
         }
     }
 }
