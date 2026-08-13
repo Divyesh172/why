@@ -1,4 +1,4 @@
-use std::env;
+#![allow(dead_code)]`nuse std::env;
 use std::fs;
 use std::path::Path;
 use crate::resolver::path::find_all_in_path;
@@ -33,3 +33,4 @@ fn count_npm_global_packages() -> Option<usize> {
     }
     None
 }
+

@@ -3,6 +3,7 @@ mod resolver;
 mod inspectors;
 mod ecosystems;
 mod platform;
+mod graph;
 
 use clap::Parser;
 use cli::{Cli, Commands};
@@ -14,7 +15,13 @@ fn main() {
     if let Some(cmd) = cli.command {
         match cmd {
             Commands::Port { port } => {
-                inspectors::port::inspect_port(port);
+                let finding = graph::chains::build_port_chain(port);
+                if cli.json {
+                    println!("{}", serde_json::to_string_pretty(&finding)
+                        .unwrap_or_else(|_| "{}".to_string()));
+                } else {
+                    finding.print_terminal();
+                }
                 return;
             }
             Commands::Project => {
@@ -35,22 +42,28 @@ fn main() {
             return;
         }
 
-        // If query is numeric, treat it as a PID process inspection
+        // Numeric → PID process inspection
         if query.chars().all(|c| c.is_ascii_digit()) {
             inspectors::process::inspect_process(&query);
             return;
         }
 
-        // Try to resolve as an executable on PATH
+        // Try to resolve as an executable on PATH → build cross-system chain
         let (resolved, _) = resolver::path::find_all_in_path(&query);
         if !resolved.is_empty() {
-            inspectors::executable::print_executable_report(&query, cli.all, cli.conflict, cli.show_env, cli.json);
+            let finding = graph::chains::build_executable_chain(&query);
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&finding)
+                    .unwrap_or_else(|_| "{}".to_string()));
+            } else {
+                finding.print_terminal();
+            }
         } else {
-            // Fallback: Check if it matches a running process name (like "chrome")
+            // Fallback: search by running process name
             inspectors::process::inspect_process(&query);
         }
     } else {
-        // Default when run with no arguments: inspect the current directory project
+        // Default (no args): inspect the current directory as a project
         inspectors::project::inspect_current_project(cli.json);
     }
 }

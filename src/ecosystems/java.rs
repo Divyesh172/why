@@ -1,4 +1,4 @@
-use crate::resolver::path::find_all_in_path;
+#![allow(dead_code)]`nuse crate::resolver::path::find_all_in_path;
 
 /// Prints associated Java tools.
 pub fn print_java_details() {
@@ -11,3 +11,4 @@ pub fn print_java_details() {
         }
     }
 }
+

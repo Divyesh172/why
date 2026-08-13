@@ -1,4 +1,4 @@
-use crate::platform::find_services;
+#![allow(dead_code)]`nuse crate::platform::find_services;
 
 /// Prints running services matching the query.
 pub fn print_services_report(query: &str) {
@@ -17,3 +17,4 @@ pub fn print_services_report(query: &str) {
         }
     }
 }
+

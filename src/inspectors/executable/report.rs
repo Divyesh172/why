@@ -1,4 +1,4 @@
-use std::env;
+#![allow(dead_code)]`nuse std::env;
 use std::path::Path;
 use crate::resolver::path::{find_all_in_path, PathSearchResult, SearchOrderEntry};
 use crate::ecosystems::print_ecosystem_details;
@@ -238,3 +238,4 @@ fn count_path_entries(path: &Path) -> usize {
     }
     count
 }
+

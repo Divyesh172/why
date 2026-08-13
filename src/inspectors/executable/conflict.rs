@@ -1,4 +1,4 @@
-use std::path::Path;
+#![allow(dead_code)]`nuse std::path::Path;
 use crate::resolver::path::{find_all_in_path, PathSearchResult};
 
 /// Checks if two files share a common installation folder hierarchy.
@@ -72,3 +72,4 @@ pub fn print_conflict_diagnostics(query_name: &str, active_path: &Path, all_resu
         }
     }
 }
+

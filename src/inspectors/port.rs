@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use crate::platform::get_port_info;
 
 /// Inspects a TCP port to see if it is occupied and by which process.

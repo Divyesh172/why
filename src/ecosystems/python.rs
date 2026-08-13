@@ -1,4 +1,4 @@
-use crate::resolver::path::find_all_in_path;
+#![allow(dead_code)]`nuse crate::resolver::path::find_all_in_path;
 
 /// Prints associated Python tools (pip, poetry, etc.) and where they resolve.
 pub fn print_python_details() {
@@ -11,3 +11,4 @@ pub fn print_python_details() {
         }
     }
 }
+

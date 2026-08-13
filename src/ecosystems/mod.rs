@@ -1,4 +1,4 @@
-pub mod node;
+#![allow(dead_code)]`npub mod node;
 pub mod python;
 pub mod rust;
 pub mod docker;
@@ -15,3 +15,4 @@ pub fn print_ecosystem_details(query_name: &str) {
         _ => {}
     }
 }
+
