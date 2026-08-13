@@ -1,4 +1,6 @@
 pub mod chains;
+pub mod report;
+pub mod fixes;
 
 use crate::inspectors::finding::{EvidenceGraph, EvidenceNode, Finding, Relationship, Severity};
 

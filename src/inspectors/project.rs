@@ -8,6 +8,7 @@ use crate::resolver::path::find_all_in_path;
 use crate::platform::find_services;
 use crate::inspectors::executable::query_version;
 use crate::inspectors::finding::{Finding, Severity, EvidenceNode, Relationship, EvidenceGraph};
+use crate::graph::report::DiagnosticReport;
 
 #[derive(Deserialize, Debug)]
 struct PackageJson {
@@ -158,7 +159,7 @@ pub fn inspect_current_project(json: bool) {
             match constraint {
                 Some(ref_err) => {
                     findings.push(Finding {
-                        severity: Severity::Error,
+                        severity: Severity::Critical,
                         subject: "Node.js".to_string(),
                         cause: format!("Active Node.js version does not satisfy package.json requirement: {}", ref_err),
                         graph: EvidenceGraph::new(
@@ -518,30 +519,11 @@ pub fn inspect_current_project(json: bool) {
     }
 
     if json {
-        if let Ok(json_str) = serde_json::to_string_pretty(&findings) {
-            println!("{}", json_str);
-        } else {
-            println!("[]");
-        }
+        let report = DiagnosticReport::new(format!("Project: {}", project_name), findings);
+        report.print_json();
     } else {
-        println!("\n\x1b[1mProject: {}\x1b[0m", project_name);
-        for finding in &findings {
-            finding.print_terminal();
-        }
-
-        let has_errors = findings.iter().any(|f| f.severity == Severity::Error);
-        if has_errors {
-            println!("\n\x1b[31m\x1b[1m✗ Project environment is incompatible.\x1b[0m");
-            println!("\n\x1b[1mPrimary reason(s):\x1b[0m");
-            for f in &findings {
-                if f.severity == Severity::Error {
-                    println!("  - {}: {}", f.subject, f.cause);
-                }
-            }
-        } else {
-            println!("\n\x1b[32m\x1b[1m✓ Project environment is healthy and compatible!\x1b[0m");
-        }
-        println!();
+        let report = DiagnosticReport::new(format!("Project: {}", project_name), findings);
+        report.print_terminal();
     }
 }
 

@@ -2,21 +2,26 @@ use serde::Serialize;
 use std::collections::{HashSet, VecDeque};
 
 #[allow(dead_code)]
-#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
     Info,
     Warning,
     Error,
+    Critical,
 }
 
 #[allow(dead_code)]
 impl Severity {
     pub fn label(&self) -> &str {
         match self {
-            Severity::Info => "Info",
-            Severity::Warning => "Warning",
-            Severity::Error => "Error",
+            Severity::Info     => "Info",
+            Severity::Warning  => "Warning",
+            Severity::Error    => "Error",
+            Severity::Critical => "Critical",
         }
+    }
+    pub fn is_blocking(&self) -> bool {
+        matches!(self, Severity::Error | Severity::Critical)
     }
 }
 
@@ -199,9 +204,10 @@ impl Finding {
     /// show a back-reference instead of repeating their subtree.
     pub fn print_terminal(&self) {
         let severity_label = match self.severity {
-            Severity::Info    => "\x1b[32m[Info]\x1b[0m",
-            Severity::Warning => "\x1b[33m[Warning]\x1b[0m",
-            Severity::Error   => "\x1b[31m[Error]\x1b[0m",
+            Severity::Info     => "\x1b[32m[Info]\x1b[0m",
+            Severity::Warning  => "\x1b[33m[Warning]\x1b[0m",
+            Severity::Error    => "\x1b[31m[Error]\x1b[0m",
+            Severity::Critical => "\x1b[1m\x1b[31m[Critical]\x1b[0m",
         };
 
         println!("\n\x1b[1m{} {}\x1b[0m", self.subject, severity_label);

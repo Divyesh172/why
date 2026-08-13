@@ -11,7 +11,7 @@ use cli::{Cli, Commands};
 fn main() {
     let cli = Cli::parse();
 
-    // 1. Route based on subcommands
+    // 1. Route subcommands
     if let Some(cmd) = cli.command {
         match cmd {
             Commands::Port { port } => {
@@ -32,23 +32,33 @@ fn main() {
                 inspectors::environment::print_single_env(&name);
                 return;
             }
+            Commands::Fix { subject } => {
+                handle_fix(&subject, cli.apply, cli.json);
+                return;
+            }
         }
     }
 
-    // 2. Route based on positional query
+    // 2. Route positional query
     if let Some(query) = cli.query {
+        // "why fix node" as a positional query (alternative syntax)
+        if query == "fix" {
+            println!("Usage: why fix <subject>  (e.g. why fix node)");
+            return;
+        }
+
         if query == "." || query.to_lowercase() == "project" {
             inspectors::project::inspect_current_project(cli.json);
             return;
         }
 
-        // Numeric → PID process inspection
+        // Numeric → PID
         if query.chars().all(|c| c.is_ascii_digit()) {
             inspectors::process::inspect_process(&query);
             return;
         }
 
-        // Try to resolve as an executable on PATH → build cross-system chain
+        // Executable on PATH → cross-system chain
         let (resolved, _) = resolver::path::find_all_in_path(&query);
         if !resolved.is_empty() {
             let finding = graph::chains::build_executable_chain(&query);
@@ -65,5 +75,28 @@ fn main() {
     } else {
         // Default (no args): inspect the current directory as a project
         inspectors::project::inspect_current_project(cli.json);
+    }
+}
+
+fn handle_fix(subject: &str, apply: bool, json: bool) {
+    match graph::fixes::suggest_fixes(subject) {
+        Some(plan) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&plan)
+                    .unwrap_or_else(|_| "{}".to_string()));
+            } else if apply {
+                plan.print_terminal();
+                println!("\n\x1b[1mApplying first option...\x1b[0m");
+                if let Err(e) = plan.apply_first() {
+                    eprintln!("\x1b[31m✗ {}\x1b[0m", e);
+                    std::process::exit(1);
+                }
+            } else {
+                plan.print_terminal();
+            }
+        }
+        None => {
+            println!("\n\x1b[32m✓ '{}' looks healthy — no fixes needed.\x1b[0m\n", subject);
+        }
     }
 }
